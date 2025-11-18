@@ -11,38 +11,58 @@ Model name is converted to lowercase for the collection name:
 - BlogPost -> "blogs" collection
 """
 
-from pydantic import BaseModel, Field
-from typing import Optional
+from pydantic import BaseModel, Field, EmailStr
+from typing import Optional, List
+from datetime import datetime
 
-# Example schemas (replace with your own):
+# ---------------------- Gym App Schemas ----------------------
 
+class GymClass(BaseModel):
+    """
+    Gym classes offered by the studio
+    Collection name: "gymclass"
+    """
+    title: str = Field(..., description="Class title, e.g., HIIT Blast")
+    description: Optional[str] = Field(None, description="What to expect in the class")
+    coach: str = Field(..., description="Coach/instructor name")
+    duration_minutes: int = Field(..., ge=15, le=180, description="Length of class in minutes")
+    capacity: int = Field(..., ge=1, le=100, description="Max attendees")
+    tags: List[str] = Field(default_factory=list, description="Tags like strength, cardio, yoga")
+    image_url: Optional[str] = Field(None, description="Cover image URL")
+    schedule_iso: str = Field(..., description="Start time in ISO format (e.g., 2025-01-01T18:00:00Z)")
+
+class Booking(BaseModel):
+    """
+    User booking for a gym class
+    Collection name: "booking"
+    """
+    class_id: str = Field(..., description="ID of the GymClass document")
+    name: str = Field(..., description="Attendee full name")
+    email: EmailStr = Field(..., description="Attendee email")
+    phone: Optional[str] = Field(None, description="Contact phone")
+    notes: Optional[str] = Field(None, description="Optional notes")
+
+class Plugin(BaseModel):
+    """
+    Simple plugin registry to enable/disable booking-related add-ons
+    Collection name: "plugin"
+    """
+    key: str = Field(..., description="Unique plugin key, e.g., payments.stripe")
+    name: str = Field(..., description="Human readable name")
+    enabled: bool = Field(True, description="Whether plugin is enabled")
+    config: dict = Field(default_factory=dict, description="Arbitrary plugin configuration")
+
+# Example schemas kept for reference (not used by app but available to viewer)
 class User(BaseModel):
-    """
-    Users collection schema
-    Collection name: "user" (lowercase of class name)
-    """
-    name: str = Field(..., description="Full name")
-    email: str = Field(..., description="Email address")
-    address: str = Field(..., description="Address")
-    age: Optional[int] = Field(None, ge=0, le=120, description="Age in years")
-    is_active: bool = Field(True, description="Whether user is active")
+    name: str
+    email: str
+    address: str
+    age: Optional[int] = None
+    is_active: bool = True
 
 class Product(BaseModel):
-    """
-    Products collection schema
-    Collection name: "product" (lowercase of class name)
-    """
-    title: str = Field(..., description="Product title")
-    description: Optional[str] = Field(None, description="Product description")
-    price: float = Field(..., ge=0, description="Price in dollars")
-    category: str = Field(..., description="Product category")
-    in_stock: bool = Field(True, description="Whether product is in stock")
-
-# Add your own schemas here:
-# --------------------------------------------------
-
-# Note: The Flames database viewer will automatically:
-# 1. Read these schemas from GET /schema endpoint
-# 2. Use them for document validation when creating/editing
-# 3. Handle all database operations (CRUD) directly
-# 4. You don't need to create any database endpoints!
+    title: str
+    description: Optional[str] = None
+    price: float
+    category: str
+    in_stock: bool = True

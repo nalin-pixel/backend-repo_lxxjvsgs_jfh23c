@@ -1,8 +1,14 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Optional
+from bson import ObjectId
 
-app = FastAPI()
+from database import db, create_document, get_documents
+from schemas import GymClass, Booking, Plugin
+
+app = FastAPI(title="Gym Booking API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,56 +20,91 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"message": "Hello from FastAPI Backend!"}
-
-@app.get("/api/hello")
-def hello():
-    return {"message": "Hello from the backend API!"}
+    return {"message": "Gym Booking API is running"}
 
 @app.get("/test")
 def test_database():
-    """Test endpoint to check if database is available and accessible"""
-    response = {
-        "backend": "✅ Running",
-        "database": "❌ Not Available",
-        "database_url": None,
-        "database_name": None,
-        "connection_status": "Not Connected",
-        "collections": []
-    }
-    
+    """Verify database connection and list collections"""
+    status = {"backend": "✅ Running", "database": "❌ Not Available", "collections": []}
     try:
-        # Try to import database module
-        from database import db
-        
         if db is not None:
-            response["database"] = "✅ Available"
-            response["database_url"] = "✅ Configured"
-            response["database_name"] = db.name if hasattr(db, 'name') else "✅ Connected"
-            response["connection_status"] = "Connected"
-            
-            # Try to list collections to verify connectivity
-            try:
-                collections = db.list_collection_names()
-                response["collections"] = collections[:10]  # Show first 10 collections
-                response["database"] = "✅ Connected & Working"
-            except Exception as e:
-                response["database"] = f"⚠️  Connected but Error: {str(e)[:50]}"
+            status["database"] = "✅ Connected"
+            status["collections"] = db.list_collection_names()
         else:
-            response["database"] = "⚠️  Available but not initialized"
-            
-    except ImportError:
-        response["database"] = "❌ Database module not found (run enable-database first)"
+            status["database"] = "❌ Not Configured"
     except Exception as e:
-        response["database"] = f"❌ Error: {str(e)[:50]}"
-    
-    # Check environment variables
-    import os
-    response["database_url"] = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
-    response["database_name"] = "✅ Set" if os.getenv("DATABASE_NAME") else "❌ Not Set"
-    
-    return response
+        status["database"] = f"❌ Error: {str(e)[:80]}"
+    return status
 
+# ---------------------- Gym Classes ----------------------
+
+@app.post("/api/classes", status_code=201)
+async def create_class(payload: GymClass):
+    class_id = create_document("gymclass", payload)
+    return {"id": class_id}
+
+@app.get("/api/classes")
+async def list_classes(limit: int = 20):
+    docs = get_documents("gymclass", limit=limit)
+    # Convert ObjectId to string
+    for d in docs:
+        d["_id"] = str(d["_id"]) if d.get("_id") else None
+    return docs
+
+# ---------------------- Bookings ----------------------
+
+@app.post("/api/bookings", status_code=201)
+async def create_booking(payload: Booking):
+    # Validate class exists
+    cid = payload.class_id
+    try:
+        obj_id = ObjectId(cid)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid class_id")
+    cls = db["gymclass"].find_one({"_id": obj_id})
+    if not cls:
+        raise HTTPException(status_code=404, detail="Class not found")
+
+    # Capacity check
+    capacity = cls.get("capacity", 0)
+    booked = db["booking"].count_documents({"class_id": cid})
+    if booked >= capacity:
+        raise HTTPException(status_code=409, detail="Class is fully booked")
+
+    booking_id = create_document("booking", payload)
+    return {"id": booking_id}
+
+@app.get("/api/bookings")
+async def list_bookings(class_id: Optional[str] = None, limit: int = 50):
+    filt = {"class_id": class_id} if class_id else {}
+    docs = get_documents("booking", filter_dict=filt, limit=limit)
+    for d in docs:
+        d["_id"] = str(d["_id"]) if d.get("_id") else None
+    return docs
+
+# ---------------------- Plugins ----------------------
+
+@app.get("/api/plugins")
+async def get_plugins():
+    docs = get_documents("plugin")
+    for d in docs:
+        d["_id"] = str(d["_id"]) if d.get("_id") else None
+    return docs
+
+class PluginToggle(BaseModel):
+    enabled: bool
+    config: dict = {}
+
+@app.post("/api/plugins/{key}")
+async def upsert_plugin(key: str, payload: PluginToggle):
+    existing = db["plugin"].find_one({"key": key})
+    data = {"key": key, "name": key.replace(".", " ").title(), "enabled": payload.enabled, "config": payload.config}
+    if existing:
+        db["plugin"].update_one({"_id": existing["_id"]}, {"$set": data})
+        _id = existing["_id"]
+    else:
+        _id = db["plugin"].insert_one(data).inserted_id
+    return {"id": str(_id)}
 
 if __name__ == "__main__":
     import uvicorn
